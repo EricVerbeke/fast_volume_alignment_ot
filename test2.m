@@ -16,16 +16,17 @@
 
 clc; clf; clear; close all
 n = 40;
+m = 10;
 
-a = rand(n,n);
-b = rand(n,n);
+a = rand(n,m);
+b = rand(n,m);
 
 tic;
 t1=myconv2(a,b);
 toc
 
 tic;
-t2=n^2*ifft2(ifft2(a).*fft2(b));
+t2=n*m*ifft2(ifft2(a).*fft2(b));
 toc
 
 disp(norm(t1-t2))
