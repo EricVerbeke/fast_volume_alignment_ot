@@ -80,5 +80,6 @@ def generate_3d_triangle_gaussian_shape(L, sigma):
     
     g = generate_centered_gaussian(L, d=3, sigma=sigma)
     f_conv = signal_convolution(f, g)
+    f_conv = f_conv / np.sum(f_conv)  # normalize to sum = 1
 
     return f_conv

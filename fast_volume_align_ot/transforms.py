@@ -2,12 +2,19 @@ import numpy as np
 
 import finufft
 
+### EV: TODO
+### - make class to compute desired transform in one line
+### - add ramp filter functions
+
 def compute_projection_tensor_from_voxel_array(f):
     ### TODO
     ### - add input arguments, simplify, move inside transform class
-    ### - remove extra comments
+    ### - add option to make different sampling points (Fibonacci, Chebyshev, etc)
+    ### - update variables to match paper
 
     nz, ny, nx = f.shape
+    
+    ### EV: add option to change these if desired
     n_points = nz  # number of Fourier grid points per 1D slice, scales with volume size
     n_phi = nz  # number of projection angles in phi
     n_theta = nz  # number of projection angles in theta
@@ -16,9 +23,8 @@ def compute_projection_tensor_from_voxel_array(f):
     ### rotate by theta (around y-axis) to form xz-plane of 1D slices
     
     ### EV: TODO: define point spacing based on odd or even grid size (DFT conventions)
-    ### EV: TODO: add option to use Chebyshev or other point spacings
-    # x3 = np.linspace(-1, 1, n_points, endpoint=False)  # initial Fourier points along z-axis (x3)
     x3 = np.linspace(-(1 - (1/n_points)), 1 - (1/n_points), n_points, endpoint=True)  # initial Fourier points along z-axis (x3)
+    # x3 = np.linspace(-1, 1, n_points, endpoint=False)  # initial Fourier points along z-axis (x3)
     # x3 = np.linspace(1 - (1/n_points), -(1 - (1/n_points)), n_points, endpoint=True)
     
     theta = np.linspace(0, 2*np.pi, n_theta, endpoint=False)
@@ -56,3 +62,56 @@ def compute_projection_tensor_from_voxel_array(f):
     f_projection_tensor = np.fft.fftshift(np.fft.ifft(np.fft.ifftshift(f_hat_slices, axes=1), axis=1), axes=1).real
 
     return f_projection_tensor
+
+
+def pdf_tensor_to_cdf_tensor(F):
+   
+    ### EV: will need to add a normalization step for ramp filtered slices
+
+    return np.cumsum(F, axis=1)
+
+
+def cdf_tensor_to_icdf_tensor(C):
+    
+    U = np.zeros(C.shape)
+    n_phi, nx, n_theta = C.shape
+     
+    ### EV: add option later to change number of points and spacing if desired
+    x = np.linspace(0, 1, nx, endpoint=True)
+    
+    ### EV: NEED TO VECTORIZE THIS
+    for phi in range(n_phi):
+        for theta in range(n_theta):
+            U[phi, :, theta] = np.interp(x, C[phi, :, theta], x)
+    
+    ### EV: ENFORCE BOUNDS (not sure why this helps)
+    U[:, 0, :] = 0
+    U[:, -1, :] = 1
+
+    return U
+
+
+def translate(array, tz, ty, tx):
+
+    return np.roll(array, (tz, ty, tx), axis=(0,1,2))
+
+
+def rotate_x(theta):
+
+    return np.array([[1,       0,              0      ],
+                     [0, np.cos(theta), -np.sin(theta)],
+                     [0, np.sin(theta),  np.cos(theta)]])
+
+
+def rotate_y(theta):
+
+    return np.array([[ np.cos(theta), 0, np.sin(theta)],
+                     [       0,       1,        0     ],
+                     [-np.sin(theta), 0, np.cos(theta)]])
+
+
+def rotate_z(theta):
+
+    return np.array([[np.cos(theta), -np.sin(theta), 0],
+                     [np.sin(theta),  np.cos(theta), 0],
+                     [      0,              0,       1]])
