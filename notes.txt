@@ -5,6 +5,8 @@ Questions
 - How many DoF since projection to 1D
 - Why should theta = [0, pi], thinking about rotating a 3D density around y-axis
 - Check for unique or multiple minima?
+- Connections to fast rotational matching method?
+- Am I doing the normalizations and volume scaling right for SW?
 
 
 
@@ -22,14 +24,22 @@ TODO
 - make plotting function to look at central 1-D slices of 3-D sphere
 - make generic fourier point input to accommodate (cartesian, polar, chebyshev, fibonacci)
 - add volume element and change of coordinates normalization
+
 - add (x4) versions of rotation alignment
    1) 3D rotation real space then SWD
    2) Projection tensor then permute columns in theta, phi
    3) Projection tensor then 2D DFT on slices
    4) Ball harmonics approach
-- update variables to match paper notation
+
 - make the fast Fouier Euclidean distance version of code too
 - add 2D alignment code for final angle
+
+- Organize all sources of possible change in convention (e.g. Cartesian -> fiNUFFT -> numpy)
+- update variables to match paper notation
+
+- make real space 3D rotation function to check if objects are aligned (might be slow / non-trivial)
+
+- not set up to compute vectorized transforms yet
 
 
 Ideas
