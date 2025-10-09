@@ -3,6 +3,14 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 
+def image_plot(f, c='viridis', cbar=True):
+    
+    plt.imshow(f, cmap=c)
+    if cbar:
+        plt.colorbar()
+    plt.show()
+
+
 def two_imshow(image1, image2, cmap='viridis', size=(7,7), cbar=False):
     
     fig, axs = plt.subplots(1, 2, figsize=size)
@@ -21,7 +29,7 @@ def two_imshow(image1, image2, cmap='viridis', size=(7,7), cbar=False):
     plt.show()
 
 
-def orthogonal_2D_slice_plot(volume, cmap='viridis', size=(7,7)):
+def orthogonal_2D_slice_plot(volume, cmap='viridis', size=(7,7), title=True):
     
     nz, ny, nx = volume.shape
     
@@ -33,6 +41,11 @@ def orthogonal_2D_slice_plot(volume, cmap='viridis', size=(7,7)):
     axs[1].axis('off')
     s_x = axs[2].imshow(volume[:, :, nx//2], cmap)
     axs[2].axis('off')
+
+    if title:
+        axs[0].set_title('axis=0, xy-plane', size=10)
+        axs[1].set_title('axis=1, xz-plane', size=10)
+        axs[2].set_title('axis=2, yz-plane', size=10)
     
     plt.tight_layout()
     plt.show()

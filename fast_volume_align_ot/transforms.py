@@ -8,10 +8,8 @@ import finufft
 class Transform():
     """
     TODO:
-    - add normalization to cdf, icdf
-    - add signed transform function
     - add modes for different Fourier point spacing
-    - different interpolation method for icdf
+    - different interpolation or smoothing method for icdf
     - vectorize the icdf step
     - allow for odd or even signal size
     """
@@ -141,9 +139,7 @@ class Transform():
         return f_rt
 
 
-    def cdf_transform(self, rescale=True):
-
-        f_rt = self.radon_transform()
+    def get_cdf(self, f_rt):
 
         if self.d == 2:
             f_cdf = np.cumsum(f_rt, axis=1)
@@ -151,11 +147,51 @@ class Transform():
             f_cdf = np.cumsum(f_rt, axis=2)
 
         return f_cdf
+    
+    
+    def normalize_cdf(self, cdfs):
+        """normalize cdfs to maximum of 1"""
+
+        if self.d == 2:
+            s = cdfs[:, -1, :]  
+            s = s.reshape(self.n, 1, self.n_omega)
+        elif self.d == 3:
+            s = cdfs[:, :, -1, :]
+            s = s.reshape(self.n, self.n_phi, 1, self.n_theta)
+
+        cdfs = cdfs / s
+
+        return cdfs
+    
+    
+    def cdf_transform(self, normalize=True):
+
+        f_rt = self.radon_transform()
+        f_cdf = self.get_cdf(f_rt)
+
+        if normalize:
+            f_cdf = self.normalize_cdf(f_cdf)
+
+        return f_cdf
 
 
-    def icdf_transform(self):
+    def signed_cdf_transform(self, normalize=True):
 
-        f_cdf = self.cdf_transform()
+        f_rt = self.radon_transform()
+        f_p, f_n = hahn_decomposition(f_rt)
+
+        f_p_cdf = self.get_cdf(f_p)
+        f_n_cdf = self.get_cdf(f_n)
+
+        if normalize:
+            f_p_cdf = self.normalize_cdf(f_p_cdf)
+            f_n_cdf = self.normalize_cdf(f_n_cdf)
+
+        return f_p_cdf, f_n_cdf
+
+
+    def get_uniform_inverse_cdf(self, f_cdf):
+
         f_icdf = np.zeros(f_cdf.shape)
         xp = np.linspace(0, 1, self.n_points, endpoint=True)  # grid points for interpolation
 
@@ -176,9 +212,40 @@ class Transform():
             f_icdf[:, :, -1, :] = 1
 
         return f_icdf
+        
+
+    def inverse_cdf_transform(self, normalize=True):
+
+        f_cdf = self.cdf_transform(normalize=normalize)
+        f_icdf = self.get_uniform_inverse_cdf(f_cdf)
+
+        return f_icdf
 
 
-def translate(array, tz, ty, tx):
+    def signed_inverse_cdf_transform(self, normalize=True):
+
+        f_p_cdf, f_n_cdf = self.signed_cdf_transform(normalize=normalize)
+        f_p_icdf = self.get_uniform_inverse_cdf(f_p_cdf)
+        f_n_icdf = self.get_uniform_inverse_cdf(f_n_cdf)
+
+        return f_p_icdf, f_n_icdf
+
+
+def hahn_decomposition(f):
+    """takes signed array f -> (f+, f-), both of size f"""
+
+    f_p = np.where(f >= 0, f, 0)
+    f_n = np.where(f <= 0, f, 0)
+
+    return f_p, f_n
+
+
+def translate_2d(array, ty, tx):
+
+    return np.roll(array, (ty, tx), axis=(0,1))
+
+
+def translate_3d(array, tz, ty, tx):
 
     return np.roll(array, (tz, ty, tx), axis=(0,1,2))
 

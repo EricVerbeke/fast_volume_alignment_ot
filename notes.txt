@@ -2,11 +2,11 @@ Questions
 ==========
 - should I define in voxel coords or on [-1, 1]
 - can I let PDF scaling grow with L, WLOG? (e.g. if sum = 1, vox values get small)
-- How many DoF since projection to 1D
 - Why should theta = [0, pi], thinking about rotating a 3D density around y-axis
-- Check for unique or multiple minima?
-- Connections to fast rotational matching method?
+- Check for unique or multiple minima
+- What are the connections to fast rotational matching method
 - Am I doing the normalizations and volume scaling right for SW?
+- Add smoothing to cdf/icdf to help with interpolation?
 
 
 
@@ -15,6 +15,7 @@ Questions
 Assumptions
 ============
 - input volumes are LxLxL
+- assume that cdfs are rescaled to 1 after the ramp filter
 
 
 
@@ -32,14 +33,10 @@ TODO
    4) Ball harmonics approach
 
 - make the fast Fouier Euclidean distance version of code too
-- add 2D alignment code for final angle
-
 - Organize all sources of possible change in convention (e.g. Cartesian -> fiNUFFT -> numpy)
 - update variables to match paper notation
-
 - make real space 3D rotation function to check if objects are aligned (might be slow / non-trivial)
 
-- not set up to compute vectorized transforms yet
 
 
 Ideas
