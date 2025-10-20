@@ -53,8 +53,6 @@ def orthogonal_2D_slice_plot(volume, cmap='viridis', size=(7,7), title=True):
 
 def orthogonal_2D_projection_plot(volume, cmap='viridis', size=(7,7), title=True):
     
-    nz, ny, nx = volume.shape
-    
     fig, axs = plt.subplots(1, 3, figsize=size)
     
     p_z = axs[0].imshow(np.sum(volume, axis=0), cmap)
@@ -65,15 +63,19 @@ def orthogonal_2D_projection_plot(volume, cmap='viridis', size=(7,7), title=True
     axs[2].axis('off')
 
     if title:
-        axs[0].set_title('axis=0, xy-plane', size=10)
-        axs[1].set_title('axis=1, xz-plane', size=10)
-        axs[2].set_title('axis=2, yz-plane', size=10)
+        axs[0].set_title('axis=0', size=10)
+        axs[1].set_title('axis=1', size=10)
+        axs[2].set_title('axis=2', size=10)
     
     plt.tight_layout()
     plt.show()
 
 
 def rotational_distance_heatmap(dists, ticks='degrees', plot_min=True):
+    """
+    plot rotational distances in theta and phi
+    update to take theta, phi as inputs? or just only label plot at specific angles
+    """
 
     n_theta, n_phi = dists.shape
     
@@ -88,15 +90,15 @@ def rotational_distance_heatmap(dists, ticks='degrees', plot_min=True):
     if ticks == 'degrees':
         ax.set_xticks(np.linspace(0, n_phi-1, 9)[:-1])
         ax.set_xticklabels(np.arange(0, 360, 45), rotation=45, size=8)
-        ax.set_yticks(np.linspace(0, n_theta-1, 9)[:-1])
-        ax.set_yticklabels(np.arange(0, 360, 45), rotation=45, size=8)
+        ax.set_yticks(np.linspace(0, n_theta-1, 5))
+        ax.set_yticklabels(np.arange(0, 180 + 1, 45), rotation=45, size=8)
         ax.tick_params(axis="both", which="major", pad=0)
     
     if ticks == 'radians':
         ax.set_xticks(np.linspace(0, n_phi-1, 9)[:-1])
         ax.set_xticklabels([0, r'$\pi/4$', r'$\pi/2$', r'$3\pi/4$', r'$\pi$', r'$5\pi/4$', r'$3\pi/2$', r'$7\pi/4$'],rotation=0, size=8)
-        ax.set_yticks(np.linspace(0, n_theta-1, 9)[:-1])
-        ax.set_yticklabels([0, r'$\pi/4$', r'$\pi/2$', r'$3\pi/4$', r'$\pi$', r'$5\pi/4$', r'$3\pi/2$', r'$7\pi/4$'],rotation=0, size=8)
+        ax.set_yticks(np.linspace(0, n_theta-1, 5))
+        ax.set_yticklabels([0, r'$\pi/4$', r'$\pi/2$', r'$3\pi/4$', r'$\pi$'],rotation=0, size=8)
         ax.tick_params(axis="both", which="major", pad=0)  
     
     if plot_min:

@@ -2,7 +2,6 @@ Questions
 ==========
 - should I define in voxel coords or on [-1, 1]
 - can I let PDF scaling grow with L, WLOG? (e.g. if sum = 1, vox values get small)
-- Why should theta = [0, pi], thinking about rotating a 3D density around y-axis
 - Check for unique or multiple minima
 - What are the connections to fast rotational matching method
 - Am I doing the normalizations and volume scaling right for SW?

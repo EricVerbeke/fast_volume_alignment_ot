@@ -6,6 +6,7 @@ from fast_volume_align_ot import utils
 
 ### TODO:
 ###  - need to check normalizing constants on distances
+###  - need to add volume elements on 3D distance
 
 
 def sliced_distance_3d(U, V):

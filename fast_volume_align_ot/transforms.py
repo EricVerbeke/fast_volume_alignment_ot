@@ -1,5 +1,7 @@
 import numpy as np
 
+from scipy import ndimage as ndi
+
 import finufft
 
 ### TODO
@@ -38,7 +40,7 @@ class Transform():
         if self.omega is None:
             self.omega = np.linspace(0, 2*np.pi, self.ny, endpoint=False)
         if self.theta is None:
-            self.theta = np.linspace(0, 2*np.pi, self.ny, endpoint=False)
+            self.theta = np.linspace(0, np.pi, self.ny, endpoint=True)
         if self.phi is None:
             self.phi = np.linspace(0, 2*np.pi, self.ny, endpoint=False)
         if self.n_points is None:
@@ -98,7 +100,8 @@ class Transform():
         y_theta_phi = np.pi * y_theta_phi.flatten()
         z_theta_phi = np.pi * z_theta_phi.flatten()
     
-        return x_theta_phi, y_theta_phi, z_theta_phi
+        ## *** EV: flip from x, y, z to x, z, y because maybe this projects to z-axis ??? *** ###
+        return x_theta_phi, z_theta_phi, y_theta_phi
 
 
     def compute_nufft(self, nufft_type=2, eps=1e-8):
@@ -269,3 +272,37 @@ def rotate_z(theta):
     return np.array([[np.cos(theta), -np.sin(theta), 0],
                      [np.sin(theta),  np.cos(theta), 0],
                      [      0,              0,       1]])
+
+
+def rotate_voxel_zyz(voxels, omega, theta, phi, order=1):
+    """
+    Extrinsic ZYZ rotation preserving a right-handed spatial interpretation.
+    """
+    # Base rotation (about fixed axes)
+    Rz1 = rotate_y(omega)
+    Ry = rotate_z(theta)
+    Rz2 = rotate_y(phi)
+    R = Rz2 @ Ry @ Rz1
+
+    # Adjustment for numpy's left hand grid convention
+    D = np.eye(3)
+    # D = np.diag([1, 1, -1])
+    # D = np.array([[ 0, 1,  0],
+    #               [ 0, 0, -1],
+    #               [-1, 0,  0]])
+    R_adj = D @ R @ D
+
+    # Invert for affine_transform's backward mapping
+    R_inv = R_adj.T
+    center = np.array(voxels.shape) / 2
+    offset = center - R_inv @ center
+
+    rotated = ndi.affine_transform(
+        voxels,
+        R_inv,
+        offset=offset,
+        order=order,
+        mode='constant',
+        cval=0.0
+    )
+    return rotated

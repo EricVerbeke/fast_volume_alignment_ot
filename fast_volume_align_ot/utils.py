@@ -41,6 +41,7 @@ def signal_convolution(f, g):
 
     ### note: doesn't account for circular convolution (wrap around)
     ### NEED TO UPDATE THIS FUNCTION
+    ### do I need a conjugation here somewhere?
 
     f_hat = np.fft.fftshift(np.fft.fftn(f))
     g_hat = np.fft.fftshift(np.fft.fftn(g))
