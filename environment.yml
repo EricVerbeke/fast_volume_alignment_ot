@@ -1,0 +1,21 @@
+name: fsw3d
+
+channels:
+  - conda-forge
+  
+dependencies:
+  - python=3.9
+  - scipy
+  - matplotlib
+  - numpy<2  # PyTorch and torch_harmonics have compatibility issue with numpy>2
+  - finufft
+  - spherical
+  - mrcfile  # optional for handling cryo-EM data
+  - pip
+  - pip:
+    - torch==1.12.0  # fle_3d
+    - torch_harmonics==0.6.3  # fle_3d
+    
+# optional for development / notebook testing
+  - ipykernel
+  # - jupyterlab
