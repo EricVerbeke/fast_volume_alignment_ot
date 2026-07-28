@@ -1,40 +1,130 @@
 import numpy as np
 
-from scipy import ndimage as ndi
-
 import finufft
 
-from fast_volume_align_ot import bh_projections
+from scipy import ndimage as ndi
 
 import torch
 import torch_harmonics as th
-# from scipy.fft import ifftn as sifftn
-# import matplotlib.pyplot as plt
 
 import spherical
 import quaternionic
-# import copy
+
+from fast_volume_align_ot import bh_projections
 
 
-### TODO
-### - update variables to match paper
+class Grids():
+    """
+    Define the grids to be used for the Transform class.
+    Grids can be input manually, or use default.
+    Default settings: grid spacing is uniform, includes endpoints,
+    and the [theta, phi, t] grids are not oversampled
+    """
 
-### - add inputs for bh_transform specifics (oversampling, max_l)
-### - add the ramp filter option for the bh_transform
-### - fix conventions to batch the bh_transform
+    ### EV: 
+    ### - do we want to control for odd/even grid size (and when oversampling)?
+    ### - currently our NUDFT doesn't support non-uniform space points (i.e. a Chebyshev grid)
+    ### - need to confirm boundaries of grids
 
-### - add modes for different Fourier point spacing
+    def __init__(self, 
+                 N,
+                 oversample_grids=['thetas', 'phis', 'ts'],
+                 oversample_factor=1,
+                 omegas=None, 
+                 thetas=None, 
+                 phis=None, 
+                 zs=None, 
+                 ss=None,
+                 ts=None, 
+                 z_endpoint=True,
+                 s_endpoint=True,
+                 t_endpoint=True,
+                 z_grid_type='uniform',
+                 s_grid_type='uniform',
+                 t_grid_type='uniform',
+                ):
 
-### - check that odd and even grids work
+        self.N = N
+        self.k = oversample_factor
+        self.omegas = omegas
+        self.thetas = thetas
+        self.phis = phis
+        self.zs = zs
+        self.ss = ss
+        self.ts = ts
+        self.z_endpoint = z_endpoint
+        self.s_endpoint = s_endpoint
+        self.t_endpoint = t_endpoint
+        self.z_grid_type = z_grid_type
+        self.s_grid_type = s_grid_type
+        self.t_grid_type = t_grid_type
 
-### - different interpolation or smoothing method for icdf
-### - vectorize the icdf step
+        self.n_omegas = self.N
+        self.n_thetas = self.N
+        self.n_phis = self.N
+        self.n_zs = self.N
+        self.n_ss = self.N
+        self.n_ts = self.N
 
+        for grid in oversample_grids:
+            if grid == 'omegas':
+                self.n_omegas = np.round(self.k*self.N).astype('int')
+            elif grid == 'thetas':
+                self.n_thetas = np.round(self.k*self.N).astype('int')
+            elif grid == 'phis':
+                self.n_phis = np.round(self.k*self.N).astype('int')
+            elif grid == 'zs':
+                self.n_zs = np.round(self.k*self.N).astype('int')
+            elif grid == 'ss':
+                self.n_ss = np.round(self.k*self.N).astype('int')
+            elif grid == 'ts':
+                self.n_ts = np.round(self.k*self.N).astype('int')
+        
+        if self.omegas is None:
+            self.omegas = np.linspace(0, 2*np.pi, self.n_omegas, endpoint=False)
+        if self.thetas is None:
+            self.thetas = np.linspace(0, np.pi, self.n_thetas, endpoint=True)  # theta is [0, pi]
+        if self.phis is None:
+            self.phis = np.linspace(0, 2*np.pi, self.n_phis, endpoint=False)  # EV: endoint=True?
 
+        if self.zs is None:
+            if z_grid_type == 'uniform':
+                if self.n_zs % 2 == 0:
+                    self.zs = np.linspace(-1, 1, self.n_zs, endpoint=False)
+                else:
+                    self.zs = np.linspace(-(1 - (1/self.n_zs)), 1 - (1/self.n_zs), self.n_zs, endpoint=True) 
+
+            elif z_grid_type == 'chebyshev':
+                if z_endpoint:
+                    self.zs = chebyshev_nodes(self.n_zs, a=-1.0, b=1.0, endpoint=True)
+                else:
+                    self.zs = chebyshev_nodes(self.n_zs, a=-1.0, b=1.0, endpoint=False)
+
+        # if self.ss is None:
+        #     if s_grid_type == 'uniform':
+        #         if self.n_ss % 2 == 0:
+        #             self.ss = np.linspace(-1, 1, self.n_ss, endpoint=False)
+        #         else:
+        #             self.ss = np.linspace(-(1 - (1/self.n_ss)), 1 - (1/self.n_ss), self.n_ss, endpoint=True) 
+
+        if self.ts is None:
+            if t_grid_type == 'uniform':
+                self.ts = np.linspace(0, 1, self.n_ts, endpoint=True)
+            
+            elif t_grid_type == 'chebyshev':
+                if t_endpoint == True:
+                    self.ts = chebyshev_nodes(self.n_ts, a=0, b=1.0, endpoint=True)
+                else:
+                    self.ts = chebyshev_nodes(self.n_ts, a=0, b=1.0, endpoint=False)
+            elif t_grid_type == 'gauss-legendre':
+                xg, wg = np.polynomial.legendre.leggauss(self.n_ts)
+                self.ts = 1/2*xg + 1/2
+                self.wg = 1/2*wg
+
+    
 class Transform():
     """
-    NOTES:
-    - in numpy convention, the 3D projection tensor is (should be):
+    in numpy convention, the 3D projection tensor is:
     
         z, phi [0, 2pi)
        /
@@ -47,15 +137,12 @@ class Transform():
 
     """
 
-    def __init__(self, f, d, omega=None, theta=None, phi=None, n_points=None, proj_type='RT', apply_ramp=False):
+    def __init__(self, f, d, grid, projection_method='RT', apply_ramp=False):
 
         self.f = f.astype(np.complex128)  # required type for nufft
         self.d = d  # dimension of input signal
-        self.omega = omega
-        self.theta = theta
-        self.phi = phi
-        self.n_points = n_points
-        self.proj_type = proj_type  # options are RT = Radon transform or BH = ball harmonics (only for 3D)
+        self.grid = grid
+        self.projection_method = projection_method  # options are RT = Radon transform or BH = ball harmonics (only for 3D)
         self.apply_ramp = apply_ramp
         self.shape = f.shape
 
@@ -69,38 +156,12 @@ class Transform():
         elif d == 3 and len(self.shape) == 3:
             self.n, self.nz, self.ny, self.nx = 1, self.shape[0], self.shape[1], self.shape[2]
 
-        if self.omega is None:
-            self.omega = np.linspace(0, 2*np.pi, self.ny, endpoint=False)
-        if self.theta is None:
-            self.theta = np.linspace(0, np.pi, self.ny, endpoint=True)  # theta is [0, pi]
-        if self.phi is None:
-            self.phi = np.linspace(0, 2*np.pi, self.ny, endpoint=False)
-        if self.n_points is None:
-            self.n_points = self.ny
 
-        self.n_omega = self.omega.size
-        self.n_theta = self.theta.size
-        self.n_phi = self.phi.size
-
-        if apply_ramp:
-            self.ramp = np.abs(np.linspace(-(1 - (1/self.n_points)), 1 - (1/self.n_points), self.n_points, endpoint=True))
-
-
-    def get_2d_to_1d_fourier_slice_points(self, mode=0):
-        """mode: controls point spacings for 1D Fourier slices (0 = Cartesian, 1 = Chebyshev)"""
-
-        ### initial Fourier points along y-axis
-        if mode == 0:
-            if self.n_points % 2 == 0:
-                y = np.linspace(-1, 1, self.n_points, endpoint=False)
-            else:
-                y = np.linspace(-(1 - (1/self.n_points)), 1 - (1/self.n_points), self.n_points, endpoint=True) 
-        elif mode == 1:
-            assert "Chebyshev points not implemented yet"
+    def get_2d_to_1d_fourier_slice_points(self):
     
         ### rotate by omega (around z-axis)
-        x_omega = y[:, np.newaxis] * np.sin(self.omega)[np.newaxis, :]
-        y_omega = y[:, np.newaxis] * np.cos(self.omega)[np.newaxis, :]
+        x_phi = self.grid.zs[:, np.newaxis] * np.sin(self.grid.phis)[np.newaxis, :]
+        y_phi = self.grid.zs[:, np.newaxis] * np.cos(self.grid.phis)[np.newaxis, :]
         
         ### format for fiNUFFT
         y_omega = np.pi * y_omega.flatten()
@@ -109,31 +170,17 @@ class Transform():
         return x_omega, y_omega
 
 
-    def get_3d_to_1d_fourier_slice_points(self, mode=0):
-        """mode controls point spacings for 1D Fourier slices (0 = Cartesian, 1 = Chebyshev, 2 = Fibonacci)"""
-    
-        ### initial Fourier points along z-axis
-        if mode == 0:
-            if self.n_points % 2 == 0:
-                z = np.linspace(-1, 1, self.n_points, endpoint=False)
-            else:
-                z = np.linspace(-(1 - (1/self.n_points)), 1 - (1/self.n_points), self.n_points, endpoint=True) 
-        elif mode == 1:
-            assert "Chebyshev points not implemented yet"
-        elif mode == 2:
-            assert "Fibonacci points not implemented yet"
-        #### OM: ADDED THIS. Could we run get_3d_to_1d_fourier_slice_points in the __init__ just so z is defined and saved?
-        self.z = z
-        ####
+    def get_3d_to_1d_fourier_slice_points(self):
+
         ### rotate central slice on z-axis by theta (around y-axis) to form xz-plane of 1D slices
-        x_theta = z[:, np.newaxis] * np.sin(self.theta)[np.newaxis, :] 
-        y_theta = np.zeros((self.n_points, self.n_theta))
-        z_theta = z[:, np.newaxis] * np.cos(self.theta)[np.newaxis, :]
+        x_theta = self.grid.zs[:, np.newaxis] * np.sin(self.grid.thetas)[np.newaxis, :] 
+        y_theta = np.zeros((self.grid.n_zs, self.grid.n_thetas))
+        z_theta = self.grid.zs[:, np.newaxis] * np.cos(self.grid.thetas)[np.newaxis, :]
         
         ### rotate each slice by phi (around the z-axis)
-        x_theta_phi = x_theta[np.newaxis, ...] * np.cos(self.phi[:, np.newaxis, np.newaxis])
-        y_theta_phi = x_theta[np.newaxis, ...] * np.sin(self.phi[:, np.newaxis, np.newaxis])
-        z_theta_phi = np.ones((self.n_phi, self.n_points, self.n_theta)) * z_theta
+        x_theta_phi = x_theta[np.newaxis, ...] * np.cos(self.grid.phis[:, np.newaxis, np.newaxis])
+        y_theta_phi = x_theta[np.newaxis, ...] * np.sin(self.grid.phis[:, np.newaxis, np.newaxis])
+        z_theta_phi = np.ones((self.grid.n_phis, self.grid.n_zs, self.grid.n_thetas)) * z_theta
         
         ### format for fiNUFFT
         x_theta_phi = np.pi * x_theta_phi.flatten()
@@ -147,28 +194,32 @@ class Transform():
     
         if self.d == 2:
             plan = finufft.Plan(nufft_type, (self.nx, self.ny), self.n, eps)
-            x, y = self.get_2d_to_1d_fourier_slice_points(mode=0)
+            x, y = self.get_2d_to_1d_fourier_slice_points()
             plan.setpts(x, y)
         
-            f_hat = plan.execute(self.f).reshape(self.n, self.n_points, self.n_omega)
+            f_hat = plan.execute(self.f).reshape(self.n, self.grid.n_zs, self.grid.n_omegas)
         
             if self.apply_ramp:
-                f_hat *= self.ramp[:, np.newaxis]
+                ramp = np.abs(self.grid.zs[:, np.newaxis])
+                f_hat = f_hat * ramp
 
         elif self.d == 3:
             plan = finufft.Plan(nufft_type, (self.nx, self.ny, self.nz), self.n, eps)
-            x, y, z = self.get_3d_to_1d_fourier_slice_points(mode=0)
+            x, y, z = self.get_3d_to_1d_fourier_slice_points()
             plan.setpts(x, y, z)
         
-            f_hat = plan.execute(self.f).reshape(self.n, self.n_phi, self.n_points, self.n_theta)
+            f_hat = plan.execute(self.f).reshape(self.n, self.grid.n_phis, self.grid.n_zs, self.grid.n_thetas)
         
             if self.apply_ramp:
-                f_hat *= self.ramp[np.newaxis, :, np.newaxis]        
+                ramp = np.abs(self.grid.zs[np.newaxis, :, np.newaxis])
+                f_hat = f_hat * ramp
         
         return f_hat
 
 
     def radon_transform(self):
+
+        ### EV: will need to change this function if using Chebyshev (or other) points 
 
         f_hat = self.compute_nufft()
 
@@ -176,24 +227,27 @@ class Transform():
             f_proj = np.fft.fftshift(np.fft.ifft(np.fft.ifftshift(f_hat, axes=1), axis=1), axes=1).real
 
         elif self.d == 3:
+
             f_proj = np.fft.fftshift(np.fft.ifft(np.fft.ifftshift(f_hat, axes=2), axis=2), axes=2).real
-            # f_proj *= ((2 - 2/self.nz)**2) / (self.nz**2)  # EV: is nz the correct? , removed this and added dV
+            ### we are integrating over dx dy, this assumes uniform grid
+            f_proj = f_proj * (self.grid.zs[1] - self.grid.zs[0])**2
 
         return f_proj
 
 
     def ball_harmonic_projections(self, s=2):
 
-        ### EV: note need to add input varibles for s (for angles too) and max_l
-        ### also bh_projections only acts on single volume at a time
-        ### could move this function outside class to simplify?
-        ### scaling of the projections?
-        ### option to apply the ramp filter too
+        ### EV: THIS NEEDS TO BE UPDATED WITH NEW GRID CLASS
+        ### - need to add input varibles for s (for angles too) and max_l
+        ### - scaling of the projections?
+        ### - add inputs for bh_transform specifics (oversampling, max_l)
+        ### - add the ramp filter option for the bh_transform
+        ### - fix conventions to vectorize the bh_transform
 
+        ### EV: these will be replaced with grid class
         N = self.nz
-
-        n_phi = N  ### add option to oversample
-        n_theta = N  ### add option to oversample
+        n_phi = N
+        n_theta = N
         nz_s = s*N  
 
         f_proj = bh_projections.projs(self.f, N, nz_s, n_theta, n_phi, max_l=30)[np.newaxis,:,::s,:]  #EV: check newaxis here
@@ -201,139 +255,117 @@ class Transform():
         return f_proj.real
 
 
-    # def get_cdf(self, f_proj):
-
-    #     if self.d == 2:
-    #         f_cdf = np.cumsum(f_proj, axis=1)
-    #     elif self.d == 3:
-    #         f_cdf = np.cumsum(f_proj, axis=2)
-
-    #     return f_cdf
-    
-    
-    # def normalize_cdf(self, cdfs):
-    #     """normalize cdfs to maximum of 1"""
-
-    #     if self.d == 2:
-    #         s = cdfs[:, -1, :]  
-    #         s = s.reshape(self.n, 1, self.n_omega)
-    #     elif self.d == 3:
-    #         s = cdfs[:, :, -1, :]
-    #         s = s.reshape(self.n, self.n_phi, 1, self.n_theta)
-
-    #     cdfs = cdfs / s
-
-    #     return cdfs
-
-
     def get_cdf(self, f_proj, normalize):
-
-        ### EV: computes the cdf by cumulative trapezoid
-        ###     can probably simplify to single d_dim function
-
-        ### EV: assuming that dz is constant for now!
-        ###     need to define the grids and vol elements earlier
-
-        ### *** the output of Radon Transform is not \int pdf = 1 ?
-        ###     so I need to keep the normalize = True here for now
-
-        dz = self.z[1]-self.z[0]
-        f_cdf = np.zeros(f_proj.shape)
+        
+        dz = np.diff(self.grid.zs)
         
         if self.d == 2:
-            avg = 0.5 * (f_proj[:, 1:, :] + f_proj[:, :-1, :])
-            trap_area = avg * dz
-            f_cdf[:, 1:, :] = np.cumsum(trap_area, axis=1)
+            pass
+        #     f_cdf = np.zeros((self.n, self.grid.n_phis, self.grid.n_zs))
+        #     avg = 0.5 * (f_proj[:, 1:, :] + f_proj[:, :-1, :])
+        #     trap_area = avg * dz[np.newaxis, :, np.newaxis]
+        #     f_cdf[:, 1:, :] = np.cumsum(trap_area, axis=1)
 
-            if normalize:
-                f_cdf = f_cdf / f_cdf[:, -1, :]
+        #     if normalize:
+        #         s = f_cdf[:, -1, :]
+        #         f_cdf = f_cdf / s.reshape(self.n, 1, self.grid.n_phis)
 
         elif self.d == 3:
+            ### compute the cumulative trapezoid
+            f_cdf = np.zeros((self.n, self.grid.n_phis, self.grid.n_zs, self.grid.n_thetas))
             avg = 0.5 * (f_proj[:, :, 1:, :] + f_proj[:, :, :-1, :])
-            trap_area = avg * dz
+            trap_area = avg * dz[np.newaxis, np.newaxis, :, np.newaxis]
             f_cdf[:, :, 1:, :] = np.cumsum(trap_area, axis=2)
-
+            
             if normalize:
-                f_cdf = f_cdf / f_cdf[:, :, -1, :]
+                s = f_cdf[:, :, -1, :]
+                f_cdf = f_cdf / s.reshape(self.n, self.grid.n_phis, 1, self.grid.n_thetas)
 
         return f_cdf       
     
     
-    def cdf_transform(self, normalize=True):
+    def cdf_transform(self, normalize=False):
 
-        if self.proj_type == 'RT':
+        if self.projection_method == 'RT':
             f_proj = self.radon_transform()
-        elif self.proj_type == 'BH':
+            
+        elif self.projection_method == 'BH':
             f_proj = self.ball_harmonic_projections()
             
         f_cdf = self.get_cdf(f_proj, normalize)
 
-        # if normalize:
-        #     f_cdf = self.normalize_cdf(f_cdf)
-
         return f_cdf
 
 
-    def signed_cdf_transform(self, normalize=True):
+    def signed_cdf_transform(self, normalize=False):
 
-        if self.proj_type == 'RT':
+        if self.projection_method == 'RT':
             f_proj = self.radon_transform()
-        elif self.proj_type == 'BH':
+            
+        elif self.projection_method == 'BH':
             f_proj = self.ball_harmonic_projections()
             
         f_p, f_n = hahn_decomposition(f_proj)
 
         f_p_cdf = self.get_cdf(f_p, normalize)
-        f_n_cdf = self.get_cdf(f_n, normalize)
-
-        # if normalize:
-        #     f_p_cdf = self.normalize_cdf(f_p_cdf)
-        #     f_n_cdf = self.normalize_cdf(f_n_cdf)
+        f_n_cdf = np.abs(self.get_cdf(f_n, normalize))  # EV: if normalize=False , I think I need to have absolute value here
 
         return f_p_cdf, f_n_cdf
 
 
-    def get_uniform_inverse_cdf(self, f_cdf):
+    def get_inverse_cdf(self, f_cdf):
 
-        ### EV: to make same as paper, the grid should be defined on [-1, 1] ?, what about dt
-        ###     the ball enclosing the density function ?
-        ###     and so should the preceeding steps
+        ### TODO: vectorize the icdf step, fix 2D version
+        
+        if self.d ==2:
+            pass
+        #     f_icdf = np.zeros((self.n, self.grid.n_ts, self.grid.n_phis))
 
-        f_icdf = np.zeros(f_cdf.shape)
-        xp = np.linspace(0, 1, self.n_points, endpoint=True)  # grid points for interpolation
-
-        if self.d == 2:
-            for n in range(self.n):
-                for omega_idx in range(self.n_omega):
-                    icdf = np.interp(xp, f_cdf[n, :, omega_idx], xp)
-                    f_icdf[n, :, omega_idx] = icdf
-            f_icdf[:, 0, :] = 0  # EV: ENFORCE BOUNDS (not sure why this helps)
-            f_icdf[:, -1, :] = 1
-
+        #     for n in range(self.n):
+        #         for phi_idx in range(self.grid.n_phis):
+        #             icdf = np.interp(self.grid.ts, f_cdf[n, :, phi_idx], self.grid.zs)
+        #             f_icdf[n, :, phi_idx] = icdf
+            
+        #     if self.grid.t_endpoint == True:
+        #         f_icdf[:, 0, :] = -1  # EV: ENFORCE BOUNDS (not sure why this helps)
+        #         f_icdf[:, -1, :] = 1
+        
+        
         if self.d == 3:
+            f_icdf = np.zeros((self.n, self.grid.n_phis, self.grid.n_ts, self.grid.n_thetas))
+
             for n in range(self.n):
-                for phi_idx in range(self.n_phi):
-                    for theta_idx in range(self.n_theta):
-                        f_icdf[n, phi_idx, :, theta_idx] = np.interp(xp, f_cdf[n, phi_idx, :, theta_idx], xp)
-            f_icdf[:, :, 0, :] = 0  # EV: ENFORCE BOUNDS (not sure why this helps)
-            f_icdf[:, :, -1, :] = 1
+                for phi_idx in range(self.grid.n_phis):
+                    for theta_idx in range(self.grid.n_thetas):
+                        
+                        cdf = f_cdf[n, phi_idx, :, theta_idx]
+                        
+                        if self.grid.t_grid_type == 'uniform':
+                            ts = np.linspace(0, cdf[-1], self.grid.n_ts, endpoint=True)
+                        elif self.grid.t_grid_type == 'chebyshev':
+                            ts = chebyshev_nodes(self.grid.n_ts, a=0, b=cdf[-1], endpoint=True)
+                        elif self.grid.t_grid_type == 'gauss-legendre':
+                            ts = self.grid.ts*cdf[-1]
+
+                        icdf = np.interp(ts, cdf, self.grid.zs)
+                        f_icdf[n, phi_idx, :, theta_idx] = icdf
 
         return f_icdf
         
 
-    def inverse_cdf_transform(self, normalize=True):
+    def inverse_cdf_transform(self, normalize=False):
 
-        f_cdf = self.cdf_transform(normalize=normalize)
-        f_icdf = self.get_uniform_inverse_cdf(f_cdf)
+        f_cdf = self.cdf_transform(normalize)
+        f_icdf = self.get_inverse_cdf(f_cdf)
 
         return f_icdf
 
 
-    def signed_inverse_cdf_transform(self, normalize=True):
+    def signed_inverse_cdf_transform(self, normalize=False):
 
-        f_p_cdf, f_n_cdf = self.signed_cdf_transform(normalize=normalize)
-        f_p_icdf = self.get_uniform_inverse_cdf(f_p_cdf)
-        f_n_icdf = self.get_uniform_inverse_cdf(f_n_cdf)
+        f_p_cdf, f_n_cdf = self.signed_cdf_transform(normalize)
+        f_p_icdf = self.get_inverse_cdf(f_p_cdf)
+        f_n_icdf = self.get_inverse_cdf(f_n_cdf)
 
         return f_p_icdf, f_n_icdf
 
@@ -389,51 +421,9 @@ def rotation_matrix_from_zyz(omega, theta, phi):
     return R
 
 
-def rotate_voxel_zyz(voxels, omega, theta, phi, order=1):
-    """
-    Extrinsic ZYZ rotation preserving a right-handed spatial interpretation.
-    """
-    # Base rotation (about fixed axes)
-    # Rz1 = rotate_z(omega)
-    # Ry = rotate_y(theta)
-    # Rz2 = rotate_z(phi)
-    # R_inv = Rz2 @ Ry @ Rz1
-
-    # OM: updates.
-    #For an explanation of the minus signs,
-    #our rotation R = Rz1@Ry@Rz2 should in the
-    #convention in the overleaf be the rotation
-    #mapping the vector with spherical coordinates
-    #(theta, varphi) to the z-axis and this
-    #is only true if we use minus signs. If not,
-    #it sends the vector with spherical coordinates
-    #(-theta, -varphi) to the z-axis.
-    Rz1 = rotate_z(-omega)
-    Ry = rotate_y(-theta)
-    Rz2 = rotate_z(-phi)
-    R_inv = (Rz1 @ Ry @ Rz2).T 
-    #We want to rotate a function f(x,y,z)
-    #by sending it to f(R_inv*(x,y,z)) = f(R^T*(x,y,z))
-    #so need the transpose in affine_transform
-
-    center = np.array(voxels.shape) / 2
-    offset = center - R_inv @ center
-
-    rotated = ndi.affine_transform(
-        voxels,
-        R_inv,
-        offset=offset,
-        order=order,
-        mode='constant',
-        cval=0.0
-    )
-    return rotated 
-
-
 def rotate_voxel_zyz_fourier(voxels, omega, theta, phi):
-    """
-    Extrinsic ZYZ rotation preserving a right-handed spatial interpretation.
-    """
+    """Extrinsic ZYZ rotation preserving a right-handed spatial interpretation"""
+    
     Rz1 = rotate_z(-omega)
     Ry = rotate_y(-theta)
     Rz2 = rotate_z(-phi)
@@ -451,11 +441,8 @@ def rotate_voxel_zyz_fourier(voxels, omega, theta, phi):
     end /= n / 2 #/np.pi
 
     grid = slice(start, end, n*1j)
-    # grid = slice(start, end, n)
 
     z, y, x = np.mgrid[grid, grid, grid].astype(np.float64)
-    # x,y,z = np.mgrid[grid, grid, grid].astype(np.float64)
-
 
     pts = np.pi * np.vstack([np.real(x).flatten(),np.real(y).flatten(),np.real(z).flatten(),])
     pts_rot = R_inv @ pts
@@ -512,19 +499,10 @@ def rotmat_to_euler_zyz(R):
     
     return alpha, beta, omega
 
-
-# def fast_block_average_downsample(x, factor):
-#     N = x.shape[0]
-#     n = N // factor
-    
-#     blocks = x.reshape(n, factor, n, factor, n, factor)
-#     return np.einsum('abcdef->ace', blocks) / factor**3
-
     
 def block_average_downsample(x, factor):
 
-    ### EV: block average 3D voxel array
-    ###     simple downsample, preserves sign and mass
+    ### EV: block average 3D voxel array. simple downsample, preserves sign and mass
     
     idx = np.arange(0, x.shape[0], factor)
 
@@ -538,9 +516,10 @@ def block_average_downsample(x, factor):
 def fourier_downsample(array, factor=1, rescale=False):
     """Downsample array by cropping its Fourier transform (factor 2 would give 100pix -> 50pix)"""
 
-    ### EV: does not apply an ideal low-pass filter first
-    ###     mass and sign not preserved in this version
-    ###     trade-off between simple downsampling and low-freq preservation / aliasing compared to block version
+    ### EV: - does not apply an ideal low-pass filter first
+    ###     - mass and sign not preserved in this version
+    ###     - trade-off between simple downsampling and low-freq preservation / 
+    ###       aliasing compared to block version
     
     assert factor >= 1, "scale factor must be greater than 1"
     
@@ -560,15 +539,16 @@ def fourier_downsample(array, factor=1, rescale=False):
     return f_downsample.real
 
 
-def cumulative_trapezoid(f, z, normalize=True):
-    """returns cumulative integral with cdf[0] = 0"""
+def chebyshev_nodes(n, a=-1.0, b=1.0, endpoint=True):
+    """ Generate n Chebyshev nodes on [-1, 1] or [0, 1]. """
 
-    dz = z[1:] - z[:-1]
-    avg = 0.5 * (f[1:] + f[:-1])
-    trap_area = avg * dz
-    cdf = np.concatenate([[0], np.cumsum(trap_area)])
+    k = np.arange(n)[::-1]
 
-    if normalize:
-        cdf = cdf / cdf[-1]
-
-    return cdf
+    if endpoint:
+        x = np.cos(np.pi * k / (n - 1))
+    else:
+        x = np.cos((2*k + 1) * np.pi / (2*n))
+        
+    x = 0.5 * (a + b) + 0.5 * (b - a) * x
+    
+    return x

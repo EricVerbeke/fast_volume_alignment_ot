@@ -6,15 +6,8 @@ from fast_volume_align_ot import utils
 
 class Signal:
     
-    ### TODO:
-    ### *** - need to change scaling so that integral = 1, not sum = 1
-    ### *** - but this yeilds small values for large grids so should probably
-    ### *** - need to think more carefully about this e.g. for nonequispaced points
-
-    ### NOTE:
+    ### NOTES:
     ### *** - assuming that input is on equispaced grid for now (dx=dy=dz)
-
-    ### *** do we want to make volume elements / grids in terms of voxel space or [-1, 1] ?
     
     def __init__(self, signal, d, dx=1, normalize=True, rescale=False, mask=True, radius=False):
         
@@ -22,7 +15,7 @@ class Signal:
         self.d = d  # dimension of input signal
         self.dx = dx  # volume element (assumes equal grid space)
         self.shape = signal.shape
-        self.normalize = normalize  # normalize signal to sum to 1
+        self.normalize = normalize  # normalize signal to integrate to 1
         self.rescale = rescale  # rescale normalization to sum to signal size
         self.mask = mask
         self.radius = radius

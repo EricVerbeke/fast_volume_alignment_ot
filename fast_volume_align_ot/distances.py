@@ -1,69 +1,61 @@
 import numpy as np
 
-### my module
-from fast_volume_align_ot import utils
+from scipy.integrate import simpson
 
 
-### TODO:
-###  - need to include normalizing constants on distances
+def compute_3d_density_volume_norm(f, grid):
+    ### EV: returns the squared norm
+    ### EV: assumes equal spaced grids for the input volume
+
+    tmp1 = simpson(f**2, x=grid.zs, axis=2)   
+    tmp2 = simpson(tmp1, x=grid.zs, axis=0)
+    f_norm = simpson(tmp2, x=grid.zs, axis=0)
+
+    return f_norm
 
 
-# def sliced_distance_3d(U, V):
-#     return np.mean((U - V)**2)
+def compute_3d_density_l2_distance(f, g, grid):
+    ### EV: returns the squared norm
+    ### EV: assumes equal spaced grids for the input volume
+
+    tmp1 = simpson((f-g)**2, x=grid.zs, axis=2)   
+    tmp2 = simpson(tmp1, x=grid.zs, axis=0)
+    f_norm = simpson(tmp2, x=grid.zs, axis=0)
+
+    return f_norm
 
 
-# def sliced_distance_3d(U, V, thetas):
-#     ### missing the correct normalizing constant
+def compute_3d_icdf_tensor_norm(f_t, grid):
+    ### EV: returns the squared norm
 
-#     return np.mean(np.mean((U-V)**2, axis=1) * np.sin(thetas))
+    ### OM: these seem to be what we need
+    thetas = np.linspace(0, np.pi, len(grid.thetas), endpoint=True)
+    phis = np.linspace(0, 2*np.pi, len(grid.phis), endpoint=True)
+    tmp1 = simpson(f_t**2 * np.sin(thetas[np.newaxis, np.newaxis, :]), x=grid.thetas, axis=2)
+    if grid.t_grid_type == 'uniform':
+        tmp2 = simpson(tmp1, x=grid.ts, axis=1) ### OM: these should all be 1, no? the order is phis, radius, theta
+    elif grid.t_grid_type == 'gauss-legendre':
+        tmp2 = np.sum(tmp1*(grid.wg.reshape(1,-1)),axis=1)
+        
+    f_t_norm = simpson(tmp2, x=phis, axis=0)
+
+    return f_t_norm
 
 
-# def signed_sliced_distance_3d(Up, Vp, Un, Vn, thetas):
-
-#     d_p = sliced_distance_3d(Up, Vp, thetas)
-#     d_n = sliced_distance_3d(Un, Vn, thetas)
-
-#     d = (d_p + d_n) / 2
-
-#     return d
-
-
-def fast_rotational_distance_2d(U, V):
+def compute_3d_icdf_inner_product(f_t, g_t, grid):
     
-    U_norm = np.linalg.norm(U)**2
-    V_norm = np.linalg.norm(V)**2
+    tmp1 = simpson((f_t * g_t) * np.sin(grid.thetas[np.newaxis, np.newaxis, :]), x=grid.thetas, axis=2)   
+    tmp2 = simpson(tmp1, x=grid.ts, axis=0)
+    sw_corr = simpson(tmp2, x=grid.phis, axis=0)
 
-    Uj_hat = np.fft.fft(U, axis=1)
-    Vj_hat = np.conj(np.fft.fft(V, axis=1))
-
-    UV_l = np.fft.ifft(Uj_hat * Vj_hat, axis=1).real
-    UV_l_sum = np.sum(UV_l, axis=0)
-
-    dists = U_norm + V_norm - 2*UV_l_sum
-    
-    return dists
+    return sw_corr
 
 
-def fast_signed_rotational_distances_2d(Up, Vp, Un, Vn):
+def compute_3d_sliced_wasserstein_distance(f_t, g_t, grid):
+    ### EV: returns the squred distance
 
-    d_p = fast_rotational_distance_2d(Up, Vp)
-    d_n = fast_rotational_distance_2d(Un, Vn)
+    tmp1 = simpson((f_t - g_t)**2 * np.sin(grid.thetas[np.newaxis, np.newaxis, :]), x=grid.thetas, axis=2)   
+    tmp2 = simpson(tmp1, x=grid.ts, axis=0)
+    sw_dist = simpson(tmp2, x=grid.phis, axis=0)
 
-    d = (d_p + d_n) / 2
-
-    return d
-
-
-def rotational_euclidean_distance_2d(f, g, angles):
- 
-    return np.array([np.linalg.norm(f - utils.rotate_image(g, -a))**2 for a in angles])
-
-
-def return_min_angles(dists, thetas, phis):
-
-    min_theta_idx, min_phi_idx = np.unravel_index(np.argmin(dists, axis=None), dists.shape)
-    
-    min_theta = thetas[min_theta_idx]
-    min_phi = phis[min_phi_idx]
-
-    return min_theta, min_phi
+    return sw_dist    
