@@ -18,17 +18,13 @@ from scipy.spatial.transform import Rotation
 ### TODO:
 
 ### change Alignment so that transforms can be done outside of alignment loop 
-### (when doing multiple alignments)
-### since the transforms class is vectorized
-### also then we can define fle only one time
-
-### add option to not save the aligned model (to save memory)
-### add option to automatically compute the default grid if not given
+###     - for doing multiple alignments, since the transforms class is vectorized
+###     - also then we can define fle only one time
 
 
 class Alignment:
 
-    def __init__(self, f, g, grid, metric, use_correlation=False):
+    def __init__(self, f, g, grid, metric, use_correlation=False, store_alignment=False):
 
         c, d, R_idx = compute_rotational_distance(f, g, grid, metric)
         
@@ -38,12 +34,14 @@ class Alignment:
             R = alignment_matrix_from_distances(d, R_idx, use_correlation=False)
 
         o_est, b_est, a_est = Rotation.from_matrix(R.T).as_euler('zyz')
-        g_aligned = transforms.rotate_voxel_zyz_fourier(g, -a_est, -b_est, -o_est)
         
-        self.correlations = c
-        self.distances = d
         self.R = R
-        self.aligned = g_aligned
+
+        if store_alignment:
+            g_aligned = transforms.rotate_voxel_zyz_fourier(g, -a_est, -b_est, -o_est)
+            self.aligned = g_aligned
+            self.correlations = c
+            self.distances = d
 
         
 def compute_rotational_distance(f, g, grid, metric):

@@ -220,6 +220,7 @@ class Transform():
     def radon_transform(self):
 
         ### EV: will need to change this function if using Chebyshev (or other) points 
+        ### EV: for signed projections, the normalization to \int = 1 happens at CDF transform
 
         f_hat = self.compute_nufft()
 
@@ -255,7 +256,8 @@ class Transform():
         return f_proj.real
 
 
-    def get_cdf(self, f_proj, normalize):
+    def get_cdf(self, f_proj):
+        ### EV: remove normalize as an option from here for now
         
         dz = np.diff(self.grid.zs)
         
@@ -276,15 +278,17 @@ class Transform():
             avg = 0.5 * (f_proj[:, :, 1:, :] + f_proj[:, :, :-1, :])
             trap_area = avg * dz[np.newaxis, np.newaxis, :, np.newaxis]
             f_cdf[:, :, 1:, :] = np.cumsum(trap_area, axis=2)
-            
-            if normalize:
-                s = f_cdf[:, :, -1, :]
-                f_cdf = f_cdf / s.reshape(self.n, self.grid.n_phis, 1, self.grid.n_thetas)
+
+            ### EV: remove this normalization, instead normalize the signed projections explicitly
+            ###     this can still be used to enforce bounds if needed
+            # if normalize:
+            #     s = f_cdf[:, :, -1, :]
+            #     f_cdf = f_cdf / s.reshape(self.n, self.grid.n_phis, 1, self.grid.n_thetas)
 
         return f_cdf       
     
     
-    def cdf_transform(self, normalize=False):
+    def cdf_transform(self):
 
         if self.projection_method == 'RT':
             f_proj = self.radon_transform()
@@ -292,12 +296,14 @@ class Transform():
         elif self.projection_method == 'BH':
             f_proj = self.ball_harmonic_projections()
             
-        f_cdf = self.get_cdf(f_proj, normalize)
+        f_cdf = self.get_cdf(f_proj)
 
         return f_cdf
 
 
-    def signed_cdf_transform(self, normalize=False):
+    def signed_cdf_transform(self, normalize=True):
+        ### EV: normalize=True for signed transform by default
+        ###     this normalizes the signed projections to \int mu = 1
 
         if self.projection_method == 'RT':
             f_proj = self.radon_transform()
@@ -307,8 +313,23 @@ class Transform():
             
         f_p, f_n = hahn_decomposition(f_proj)
 
-        f_p_cdf = self.get_cdf(f_p, normalize)
-        f_n_cdf = np.abs(self.get_cdf(f_n, normalize))  # EV: if normalize=False , I think I need to have absolute value here
+        f_n = np.abs(f_n)
+
+        if normalize:
+            dz = self.grid.zs[1] - self.grid.zs[0]  ### EV: assuming uniform grid here
+            
+            n_p = np.sum(f_p, axis=2, keepdims=True)
+            n_n = np.sum(f_n, axis=2, keepdims=True)
+
+            f_p = f_p / (n_p * dz)
+            f_n = f_n / (n_n * dz)
+
+        f_p_cdf = self.get_cdf(f_p)
+        f_n_cdf = self.get_cdf(f_n)
+        
+        ### EV: previous version from 2026/08/07
+        # f_p_cdf = self.get_cdf(f_p, normalize)
+        # f_n_cdf = np.abs(self.get_cdf(f_n, normalize))  # EV: if normalize=False , I think I need to have absolute value here
 
         return f_p_cdf, f_n_cdf
 
@@ -353,15 +374,15 @@ class Transform():
         return f_icdf
         
 
-    def inverse_cdf_transform(self, normalize=False):
+    def inverse_cdf_transform(self):
 
-        f_cdf = self.cdf_transform(normalize)
+        f_cdf = self.cdf_transform()
         f_icdf = self.get_inverse_cdf(f_cdf)
 
         return f_icdf
 
 
-    def signed_inverse_cdf_transform(self, normalize=False):
+    def signed_inverse_cdf_transform(self, normalize=True):
 
         f_p_cdf, f_n_cdf = self.signed_cdf_transform(normalize)
         f_p_icdf = self.get_inverse_cdf(f_p_cdf)
