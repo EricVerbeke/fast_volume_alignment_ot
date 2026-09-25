@@ -212,7 +212,9 @@ class Transform():
         
             if self.apply_ramp:
                 ramp = np.abs(self.grid.zs[np.newaxis, :, np.newaxis])
-                f_hat = f_hat * ramp
+                # f_hat = f_hat * ramp
+                ### EV: area on the sphere associated with each point at distance r from the origin scales as r^2
+                f_hat = f_hat * ramp**2
         
         return f_hat
 
@@ -449,6 +451,8 @@ def rotate_voxel_zyz_fourier(voxels, omega, theta, phi):
     Ry = rotate_y(-theta)
     Rz2 = rotate_z(-phi)
     R_inv = (Rz1 @ Ry @ Rz2).T
+
+    print(R_inv)
 
     n = voxels.shape[0]
     start = -n // 2 + 1

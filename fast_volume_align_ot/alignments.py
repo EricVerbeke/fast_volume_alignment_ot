@@ -24,6 +24,8 @@ from scipy.spatial.transform import Rotation
 
 class Alignment:
 
+    """f and g should are the normalized 3-D voxelized volumes"""
+
     def __init__(self, f, g, grid, metric, use_correlation=False, store_alignment=False):
 
         c, d, R_idx = compute_rotational_distance(f, g, grid, metric)
@@ -76,26 +78,14 @@ def compute_rotational_distance(f, g, grid, metric):
 
             f_tp, f_tn = transforms.Transform(f, d, grid, apply_ramp=True).signed_inverse_cdf_transform()
             f_tp, f_tn = f_tp[0], f_tn[0]
-
+            
             g_tp, g_tn = transforms.Transform(g, d, grid, apply_ramp=True).signed_inverse_cdf_transform()
             g_tp, g_tn = g_tp[0], g_tn[0]
-
-            cp, Rp_idx, f_tp_norm, g_tp_norm = fast_rotational_correlation(f_tp, g_tp, grid, fle)
-            cp = cp/np.sqrt(f_tp_norm*g_tp_norm)
             
-            cn, Rn_idx, f_tn_norm, g_tn_norm = fast_rotational_correlation(f_tn, g_tn, grid, fle)
-            cn = cn/np.sqrt(f_tn_norm*g_tn_norm)
+            cp, R_idx, f_t_norm, g_t_norm = fast_rotational_correlation_vector(f_tp, g_tp, f_tn, g_tn, grid, fle)
+            c = cp/np.sqrt(f_t_norm*g_t_norm)
 
-            c = (cp + cn) / 2
-            
-            d_rfsw_p = (np.sqrt(f_tp_norm/g_tp_norm) + np.sqrt(g_tp_norm/f_tp_norm) - 2*cp) / (4*np.pi)
-            d_rfsw_n = (np.sqrt(f_tn_norm/g_tn_norm) + np.sqrt(g_tn_norm/f_tn_norm) - 2*cn) / (4*np.pi)
-            
-            d = (d_rfsw_p + d_rfsw_n) / 2
-
-            if Rp_idx != Rn_idx:
-                print("NOTE: positive and negative distance give different minimum")
-            R_idx = Rp_idx
+            d = (np.sqrt(f_t_norm/g_t_norm) + np.sqrt(g_t_norm/f_t_norm) - 2*c) / (4*np.pi)
     
         elif metric == 'SC':
             pass    
@@ -234,8 +224,129 @@ def fast_rotational_correlation(f, g, grid, fle):
     ### need to multiply by T.size, because the ifft divides by this number
     c = T.size*np.fft.ifftn(np.fft.ifftshift(T)).real
 
-    # print('correlation R=0: ', np.amax(tmpcorr))
-    # print('all correlation: ', np.amax(c))
+    if np.amax(tmpcorr) >= np.amax(c):
+        c = np.zeros(T.shape)   # EV: actually doesn't need to be same dimension
+        c[0,0,0] = tmpcorr
+        R_idx = 0
+    
+    else:
+        R_idx = 1
+
+    return c, R_idx, f_t_norm, g_t_norm
+
+
+def fast_rotational_correlation_vector(f, g, f2, g2, grid, fle):
+    """
+    f and g are the icdfs of the projection tensors Pf and Pg
+    fle is a basis object from FLE3D, needed to call some functions that massage
+    the input to the fast spherical harmonics transform. We can get around using this
+    by copying some functions from FLE3D, if we want.
+
+
+    This is the specifically for the signed version, so we can compute d_RFSW
+    as a single optimization problem
+    """
+    
+    f = np.squeeze(f.copy())
+    g = np.squeeze(g.copy())
+    f2 = np.squeeze(f.copy())
+    g2 = np.squeeze(g.copy())
+    lmax = fle.lmax+1
+
+    sht = th.RealSHT(grid.n_thetas, grid.n_phis, lmax=lmax, grid="equiangular", csphase=True).to("cpu")
+
+    #torch_harmonics wants the order radius, theta, phi
+    f_swapped = np.transpose(f,(1,2,0))
+    g_swapped = np.transpose(g,(1,2,0))
+    f_swapped2 = np.transpose(f2,(1,2,0))
+    g_swapped2 = np.transpose(g2,(1,2,0))
+    fhat = fle.torch_reshape_order_t(sht(torch.DoubleTensor(np.real(f_swapped)).to("cpu")).cpu().numpy())
+    ghat = fle.torch_reshape_order_t(sht(torch.DoubleTensor(np.real(g_swapped)).to("cpu")).cpu().numpy())
+    fhat = fhat[:,:,:(2*lmax+1)]
+    ghat = ghat[:,:,:(2*lmax+1)]
+    fhat2 = fle.torch_reshape_order_t(sht(torch.DoubleTensor(np.real(f_swapped2)).to("cpu")).cpu().numpy())
+    ghat2 = fle.torch_reshape_order_t(sht(torch.DoubleTensor(np.real(g_swapped2)).to("cpu")).cpu().numpy())
+    fhat2 = fhat2[:,:,:(2*lmax+1)]
+    ghat2 = ghat2[:,:,:(2*lmax+1)]
+
+    Ilm = np.zeros((lmax,2*lmax+1,2*lmax+1),dtype=np.complex128)
+    #we need to remember to multiply by r^2, which cancels out the 1/abs(z) above...
+    for m1 in range(-lmax, lmax+1):
+        m1ind = 2*np.abs(m1) - (m1 < 0)
+        for m2 in range(-lmax, lmax+1):
+            m2ind = 2*np.abs(m2) - (m2 < 0)
+            # inds = np.arange(n_points//2-1,len(z))
+            # inds = np.arange(1,len(z))
+            inds = np.arange(0, grid.n_ts)
+            for lind in range(Ilm.shape[0]):
+
+                # #### better
+                if grid.t_grid_type == 'uniform':
+                    Ilm[lind,m1+lmax,m2+lmax] = simpson(
+                        fhat[inds,lind,m1ind]*np.conj(ghat[inds,lind,m2ind])\
+                            +fhat2[inds,lind,m1ind]*np.conj(ghat2[inds,lind,m2ind]), x=grid.ts[inds]
+                    )
+
+                #### testing
+                if grid.t_grid_type == 'gauss-legendre':
+                    Ilm[lind,m1+lmax,m2+lmax] = np.sum(
+                        (fhat[inds,lind,m1ind]*np.conj(ghat[inds,lind,m2ind])\
+                        +fhat2[inds,lind,m1ind]*np.conj(ghat2[inds,lind,m2ind]))*grid.wg[inds]
+                    )
+
+    f_t_norm = 0
+    g_t_norm = 0
+    for m in range(-lmax, lmax+1):
+        mind = 2*np.abs(m) - (m < 0)
+        inds = np.arange(0, grid.n_ts)
+        for lind in range(Ilm.shape[0]):
+            if grid.t_grid_type == 'uniform':
+                f_t_norm = f_t_norm + simpson(
+                    fhat[inds,lind,mind]*np.conj(fhat[inds,lind,mind])\
+                    +fhat2[inds,lind,mind]*np.conj(fhat2[inds,lind,mind]), x=grid.ts[inds]
+                ).real
+                g_t_norm = g_t_norm + simpson(
+                    ghat[inds,lind,mind]*np.conj(ghat[inds,lind,mind])\
+                    +ghat2[inds,lind,mind]*np.conj(ghat2[inds,lind,mind]), x=grid.ts[inds]
+                ).real
+
+            if grid.t_grid_type == 'gauss-legendre':
+                f_t_norm = f_t_norm + np.sum(
+                    (fhat[inds,lind,mind]*np.conj(fhat[inds,lind,mind])\
+                    +fhat2[inds,lind,mind]*np.conj(fhat2[inds,lind,mind]))*grid.wg[inds]
+                ).real
+
+                g_t_norm = g_t_norm + np.sum(
+                    (ghat[inds,lind,mind]*np.conj(ghat[inds,lind,mind])\
+                    +ghat2[inds,lind,mind]*np.conj(ghat2[inds,lind,mind]))*grid.wg[inds]
+                ).real
+                    
+    wigner = spherical.Wigner(lmax)
+    R = quaternionic.array.from_euler_angles(0, np.pi/2, 0)
+    d = wigner.D(R)
+
+    dlm = np.zeros((lmax, 2*lmax+1, 2*lmax+1),dtype=np.complex128)
+    for m1 in range(-lmax, lmax+1):
+        for m2 in range(-lmax, lmax+1):
+            for l in range(lmax):
+                if abs(m1) <= l and abs(m2) <= l:
+                    # dlm[l,m1+lmax,m2+lmax] = d[wigner.Dindex(l, m1, m2)]
+                    dlm[l,m1+lmax,m2+lmax] = d[wigner.Dindex(l, m2, m1)]
+            # dlm[:,m1+lmax,m2+lmax] = wigner_dl(0, lmax, m1, m2, np.pi/2)
+            #computes all wigner d-matrices for l between 0 and lmax at fixed m1,m2 and angle pi/2
+
+    T = np.zeros((2*lmax+1, 2*lmax+1, 2*lmax+1),dtype=np.complex128)
+    for m in range(-lmax, lmax+1):
+        for h in range(-lmax, lmax+1):
+            for mp in range(-lmax, lmax+1):
+                T[m+lmax,h+lmax,mp+lmax] = np.sum(dlm[:,m+lmax,h+lmax]*dlm[:,h+lmax,mp+lmax]*Ilm[:,m+lmax,mp+lmax])
+
+    ### EV: computes the correlation with no rotation    
+    tmpcorr = 0
+    for l in range(Ilm.shape[0]):
+        tmpcorr += np.trace(Ilm[l,:,:]).real
+
+    c = T.size*np.fft.ifftn(np.fft.ifftshift(T)).real
 
     if np.amax(tmpcorr) >= np.amax(c):
         c = np.zeros(T.shape)   # EV: actually doesn't need to be same dimension
@@ -375,9 +486,6 @@ def align_l2(f, g, grid, fle):
 
     ### need to multiply by T.size, because the ifft divides by this number
     c = T.size*np.fft.ifftn(np.fft.ifftshift(T)).real
-
-    # print('correlation R=0: ', np.amax(tmpcorr))
-    # print('all correlation: ', np.amax(c))
 
     if np.amax(tmpcorr) >= np.amax(c):
         c = np.zeros(T.shape)   # EV: actually doesn't need to be same dimension
