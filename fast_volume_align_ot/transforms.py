@@ -64,7 +64,7 @@ class Grids():
         self.n_phis = self.N
         self.n_zs = self.N
         self.n_ss = self.N
-        self.n_ts = self.N
+        self.n_ts = N
 
         for grid in oversample_grids:
             if grid == 'omegas':
@@ -86,6 +86,10 @@ class Grids():
             self.thetas = np.linspace(0, np.pi, self.n_thetas, endpoint=True)  # theta is [0, pi]
         if self.phis is None:
             self.phis = np.linspace(0, 2*np.pi, self.n_phis, endpoint=False)  # EV: endoint=True?
+            self.phis_half = np.linspace(0, 2*np.pi, self.n_phis, endpoint=False)[0:(self.n_phis+1)//2]  # EV: endoint=True?
+            self.n_phis_half = len(self.phis_half)
+            
+            # print('---', len(self.phis), self.n_phis_half)
 
         if self.zs is None:
             if z_grid_type == 'uniform':
@@ -117,6 +121,9 @@ class Grids():
                 else:
                     self.ts = chebyshev_nodes(self.n_ts, a=0, b=1.0, endpoint=False)
             elif t_grid_type == 'gauss-legendre':
+                #WE MIGHT BE ABLE TO USE FEWER POINTS HERE. WE CAN TUNE IT.
+                # self.n_ts = self.N//2
+                # self.n_ts = max(5, self.N // 16)
                 xg, wg = np.polynomial.legendre.leggauss(self.n_ts)
                 self.ts = 1/2*xg + 1/2
                 self.wg = 1/2*wg
@@ -178,10 +185,11 @@ class Transform():
         z_theta = self.grid.zs[:, np.newaxis] * np.cos(self.grid.thetas)[np.newaxis, :]
         
         ### rotate each slice by phi (around the z-axis)
-        x_theta_phi = x_theta[np.newaxis, ...] * np.cos(self.grid.phis[:, np.newaxis, np.newaxis])
-        y_theta_phi = x_theta[np.newaxis, ...] * np.sin(self.grid.phis[:, np.newaxis, np.newaxis])
-        z_theta_phi = np.ones((self.grid.n_phis, self.grid.n_zs, self.grid.n_thetas)) * z_theta
-        
+        x_theta_phi = x_theta[np.newaxis, ...] * np.cos(self.grid.phis_half[:, np.newaxis, np.newaxis])
+        y_theta_phi = x_theta[np.newaxis, ...] * np.sin(self.grid.phis_half[:, np.newaxis, np.newaxis])
+        z_theta_phi = np.ones((len(self.grid.phis_half), self.grid.n_zs, self.grid.n_thetas)) * z_theta
+
+        # print('sizes',x_theta_phi.shape, z_theta_phi.shape)
         ### format for fiNUFFT
         x_theta_phi = np.pi * x_theta_phi.flatten()
         y_theta_phi = np.pi * y_theta_phi.flatten()
@@ -208,7 +216,7 @@ class Transform():
             x, y, z = self.get_3d_to_1d_fourier_slice_points()
             plan.setpts(x, y, z)
         
-            f_hat = plan.execute(self.f).reshape(self.n, self.grid.n_phis, self.grid.n_zs, self.grid.n_thetas)
+            f_hat = plan.execute(self.f).reshape(self.n, self.grid.n_phis_half, self.grid.n_zs, self.grid.n_thetas)
         
             if self.apply_ramp:
                 ramp = np.abs(self.grid.zs[np.newaxis, :, np.newaxis])
@@ -232,8 +240,20 @@ class Transform():
         elif self.d == 3:
 
             f_proj = np.fft.fftshift(np.fft.ifft(np.fft.ifftshift(f_hat, axes=2), axis=2), axes=2).real
+            f_proj[:,:,0,:] = 0 #OM: added this 
             ### we are integrating over dx dy, this assumes uniform grid
-            f_proj = f_proj * (self.grid.zs[1] - self.grid.zs[0])**2
+            res = f_proj * (self.grid.zs[1] - self.grid.zs[0])**2
+
+            f_proj=np.zeros((self.n, self.grid.n_phis, self.grid.n_zs, self.grid.n_thetas))
+            f_proj[:, 0:(self.grid.n_phis+1)//2, :, :] = res
+            # f_proj[:, (self.grid.n_phis+1)//2:, :, :] = res[:,((self.grid.n_phis)%2):,:,:][::-1]
+
+            #self.grid.zs goes between -1 and 1-1/nz. Since the structure is assumed to be zero
+            #at +- 1, insert a zero
+            # f_proj[:, (self.grid.n_phis+1)//2:, 1:, :] = res[:,((self.grid.n_phis)%2):,1:,:][::-1]
+            # f_proj[:, (self.grid.n_phis+1)//2:, :, :] = res[:,((self.grid.n_phis)%2):,:,:][::-1]
+            # f_proj[:, (self.grid.n_phis+1)//2:, :, :] = res[:,((self.grid.n_phis)%2):,:,:][::-1]
+            f_proj[:, (self.grid.n_phis+1)//2:, 1:, :] = res[:,((self.grid.n_phis)%2):,-1:0:-1,::-1]
 
         return f_proj
 
@@ -279,6 +299,10 @@ class Transform():
             f_cdf = np.zeros((self.n, self.grid.n_phis, self.grid.n_zs, self.grid.n_thetas))
             avg = 0.5 * (f_proj[:, :, 1:, :] + f_proj[:, :, :-1, :])
             trap_area = avg * dz[np.newaxis, np.newaxis, :, np.newaxis]
+            # tmp = np.cumsum(trap_area, axis=2)
+            # print(self.grid.phis.shape,f_cdf.shape,tmp.shape)
+
+
             f_cdf[:, :, 1:, :] = np.cumsum(trap_area, axis=2)
 
             ### EV: remove this normalization, instead normalize the signed projections explicitly
@@ -452,7 +476,7 @@ def rotate_voxel_zyz_fourier(voxels, omega, theta, phi):
     Rz2 = rotate_z(-phi)
     R_inv = (Rz1 @ Ry @ Rz2).T
 
-    print(R_inv)
+    # print(R_inv)
 
     n = voxels.shape[0]
     start = -n // 2 + 1
