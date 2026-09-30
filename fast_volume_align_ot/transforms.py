@@ -41,7 +41,7 @@ class Grids():
                  t_endpoint=True,
                  z_grid_type='uniform',
                  s_grid_type='uniform',
-                 t_grid_type='uniform',
+                 t_grid_type='gauss-legendre',
                 ):
 
         self.N = N
@@ -88,7 +88,6 @@ class Grids():
             self.phis = np.linspace(0, 2*np.pi, self.n_phis, endpoint=False)  # EV: endoint=True?
             self.phis_half = np.linspace(0, 2*np.pi, self.n_phis, endpoint=False)[0:(self.n_phis+1)//2]  # EV: endoint=True?
             self.n_phis_half = len(self.phis_half)
-            
             # print('---', len(self.phis), self.n_phis_half)
 
         if self.zs is None:

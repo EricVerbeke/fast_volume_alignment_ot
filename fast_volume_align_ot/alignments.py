@@ -70,7 +70,7 @@ def compute_rotational_distance(f, g, grid, metric):
             g_t = transforms.Transform(g, d, grid).inverse_cdf_transform()[0]
             
             c, R_idx, f_t_norm, g_t_norm = fast_rotational_correlation(f_t, g_t, grid, fle)
-            
+  
             c = c/np.sqrt(f_t_norm*g_t_norm)
             d = (np.sqrt(f_t_norm/g_t_norm) + np.sqrt(g_t_norm/f_t_norm) - 2*c) / (4*np.pi)
 
@@ -83,6 +83,7 @@ def compute_rotational_distance(f, g, grid, metric):
             g_tp, g_tn = g_tp[0], g_tn[0]
             
             cp, R_idx, f_t_norm, g_t_norm = fast_rotational_correlation_vector(f_tp, g_tp, f_tn, g_tn, grid, fle)
+  
             c = cp/np.sqrt(f_t_norm*g_t_norm)
 
             d = (np.sqrt(f_t_norm/g_t_norm) + np.sqrt(g_t_norm/f_t_norm) - 2*c) / (4*np.pi)
@@ -147,7 +148,6 @@ def torch_reshape_order_t(b):
 
     return bn
 
-
 def fast_rotational_correlation(f, g, grid, fle):
     """
     f and g are the icdfs of the projection tensors Pf and Pg
@@ -168,18 +168,23 @@ def fast_rotational_correlation(f, g, grid, fle):
     f_swapped = np.transpose(f,(1,2,0))
     g_swapped = np.transpose(g,(1,2,0))
 
-    # lmax = fle.lmax+1
+    lmax = fle.lmax+1
     # fhattest = fle.torch_reshape_order_t(sht(torch.DoubleTensor(np.real(f_swapped)).to("cpu")).cpu().numpy())
     # ghattest = fle.torch_reshape_order_t(sht(torch.DoubleTensor(np.real(g_swapped)).to("cpu")).cpu().numpy())
     # fhattest = fhattest[:,:,:(2*lmax+1)]
     # ghattest = ghattest[:,:,:(2*lmax+1)]
-    ### these are now in order radius, l, m, where for fixed radius and l, the m index varies like
-    #m=0,-1,1,-2,2,-3,3, ...
+    # ### these are now in order radius, l, m, where for fixed radius and l, the m index varies like
+    # #m=0,-1,1,-2,2,-3,3, ...
 
-    fhat = torch_reshape_order_t(sht(torch.DoubleTensor(np.real(f_swapped)).to("cpu")).cpu().numpy())
-    ghat = torch_reshape_order_t(sht(torch.DoubleTensor(np.real(g_swapped)).to("cpu")).cpu().numpy())
+
 
     if grid.t_grid_type == 'uniform':
+        fhat = fle.torch_reshape_order_t(sht(torch.DoubleTensor(np.real(f_swapped)).to("cpu")).cpu().numpy())
+        ghat = fle.torch_reshape_order_t(sht(torch.DoubleTensor(np.real(g_swapped)).to("cpu")).cpu().numpy())
+        fhat = fhat[:,:,:(2*lmax+1)]
+        ghat = ghat[:,:,:(2*lmax+1)]
+        ### these are now in order radius, l, m, where for fixed radius and l, the m index varies like
+        #m=0,-1,1,-2,2,-3,3, ...
         Ilm = np.zeros((lmax,2*lmax+1,2*lmax+1),dtype=np.complex128)
         for m1 in range(-lmax, lmax+1):
             m1ind = 2*np.abs(m1) - (m1 < 0)
@@ -192,7 +197,8 @@ def fast_rotational_correlation(f, g, grid, fle):
                         fhat[inds,lind,m1ind]*np.conj(ghat[inds,lind,m2ind]), x=grid.ts[inds]
                     )
     if grid.t_grid_type == 'gauss-legendre':
-        print(fhat.shape, np.conj(ghat).shape, grid.wg.shape)
+        fhat = torch_reshape_order_t(sht(torch.DoubleTensor(np.real(f_swapped)).to("cpu")).cpu().numpy())
+        ghat = torch_reshape_order_t(sht(torch.DoubleTensor(np.real(g_swapped)).to("cpu")).cpu().numpy())
         Ilm = np.einsum('ilm,ilp,i->lmp',fhat, np.conj(ghat), grid.wg)
         # Ilm[lind,m1+lmax,m2+lmax] = np.sum(
         #     fhat[inds,lind,m1ind]*np.conj(ghat[inds,lind,m2ind])*grid.wg[inds]
@@ -217,7 +223,7 @@ def fast_rotational_correlation(f, g, grid, fle):
     #                     fhattest[inds,lind,m1ind]*np.conj(ghattest[inds,lind,m2ind])*grid.wg[inds]
     #                 )
     # print(np.unravel_index(np.argmax(np.abs(Ilm2)),Ilm2.shape))
-    # print('checking Ilm', np.linalg.norm(Ilm-Ilm2), Ilm2[0,96,:], Ilm[0,96,:])
+    # # print('checking Ilm', np.linalg.norm(Ilm-Ilm2), Ilm2[0,96,:], Ilm[0,96,:])
 
 
     if grid.t_grid_type == 'uniform':
@@ -266,11 +272,7 @@ def fast_rotational_correlation(f, g, grid, fle):
     dlm = np.zeros((lmax, 2*lmax+1, 2*lmax+1),dtype=np.complex128)
     dlm2 = np.zeros((lmax, 2*lmax+1, 2*lmax+1),dtype=np.complex128)
 
-    # for m1 in range(-lmax, lmax+1):
-    #     for m2 in range(-lmax, lmax+1):
-    #         for l in range(lmax):
-    #             if abs(m1) <= l and abs(m2) <= l:
-    #                 dlm2[l,m1+lmax,m2+lmax] = d[wigner.Dindex(l, m2, m1)]
+
     # for l in range(lmax):
     #     for m1 in range(-l, l+1):
     #         for m2 in range(-l, l+1):
@@ -279,6 +281,11 @@ def fast_rotational_correlation(f, g, grid, fle):
         for m1 in range(-l, l+1):
             dlm[l,m1+lmax,(lmax-l):(lmax+l+1)] = d[wigner.Dindex(l, np.arange(-l, l+1), m1)]
 
+    # for m1 in range(-lmax, lmax+1):
+    #     for m2 in range(-lmax, lmax+1):
+    #         for l in range(lmax):
+    #             if abs(m1) <= l and abs(m2) <= l:
+    #                 dlm2[l,m1+lmax,m2+lmax] = d[wigner.Dindex(l, m2, m1)]
     # print('checking d', np.linalg.norm(dlm-dlm2), np.linalg.norm(dlm))    
 
     T = np.einsum('ijk,ikl,ijl -> jkl',dlm,dlm,Ilm)
@@ -331,16 +338,21 @@ def fast_rotational_correlation_vector(f, g, f2, g2, grid, fle):
     sht = th.RealSHT(grid.n_thetas, grid.n_phis, lmax=lmax, grid="equiangular", csphase=True).to("cpu")
 
     #torch_harmonics wants the order radius, theta, phi
-    f_swapped = np.transpose(f,(1,2,0))
-    g_swapped = np.transpose(g,(1,2,0))
-    f_swapped2 = np.transpose(f2,(1,2,0))
-    g_swapped2 = np.transpose(g2,(1,2,0))
-    fhat = torch_reshape_order_t(sht(torch.DoubleTensor(np.real(f_swapped)).to("cpu")).cpu().numpy())
-    ghat = torch_reshape_order_t(sht(torch.DoubleTensor(np.real(g_swapped)).to("cpu")).cpu().numpy())
-    fhat2 = torch_reshape_order_t(sht(torch.DoubleTensor(np.real(f_swapped2)).to("cpu")).cpu().numpy())
-    ghat2 = torch_reshape_order_t(sht(torch.DoubleTensor(np.real(g_swapped2)).to("cpu")).cpu().numpy())
+
 
     if grid.t_grid_type == 'uniform':
+        f_swapped = np.transpose(f,(1,2,0))
+        g_swapped = np.transpose(g,(1,2,0))
+        f_swapped2 = np.transpose(f2,(1,2,0))
+        g_swapped2 = np.transpose(g2,(1,2,0))
+        fhat = fle.torch_reshape_order_t(sht(torch.DoubleTensor(np.real(f_swapped)).to("cpu")).cpu().numpy())
+        ghat = fle.torch_reshape_order_t(sht(torch.DoubleTensor(np.real(g_swapped)).to("cpu")).cpu().numpy())
+        fhat2 = fle.torch_reshape_order_t(sht(torch.DoubleTensor(np.real(f_swapped2)).to("cpu")).cpu().numpy())
+        ghat2 = fle.torch_reshape_order_t(sht(torch.DoubleTensor(np.real(g_swapped2)).to("cpu")).cpu().numpy())
+        fhat = fhat[:,:,:(2*lmax+1)]
+        ghat = ghat[:,:,:(2*lmax+1)]
+        fhat2 = fhat2[:,:,:(2*lmax+1)]
+        ghat2 = ghat2[:,:,:(2*lmax+1)]
         Ilm = np.zeros((lmax,2*lmax+1,2*lmax+1),dtype=np.complex128)
         #we need to remember to multiply by r^2, which cancels out the 1/abs(z) above...
         for m1 in range(-lmax, lmax+1):
@@ -366,7 +378,15 @@ def fast_rotational_correlation_vector(f, g, f2, g2, grid, fle):
                     #     )
 
     if grid.t_grid_type == 'gauss-legendre':
-        print(fhat.shape, np.conj(ghat).shape, grid.wg.shape)
+        f_swapped = np.transpose(f,(1,2,0))
+        g_swapped = np.transpose(g,(1,2,0))
+        f_swapped2 = np.transpose(f2,(1,2,0))
+        g_swapped2 = np.transpose(g2,(1,2,0))
+        fhat = torch_reshape_order_t(sht(torch.DoubleTensor(np.real(f_swapped)).to("cpu")).cpu().numpy())
+        ghat = torch_reshape_order_t(sht(torch.DoubleTensor(np.real(g_swapped)).to("cpu")).cpu().numpy())
+        fhat2 = torch_reshape_order_t(sht(torch.DoubleTensor(np.real(f_swapped2)).to("cpu")).cpu().numpy())
+        ghat2 = torch_reshape_order_t(sht(torch.DoubleTensor(np.real(g_swapped2)).to("cpu")).cpu().numpy())
+        # print(fhat.shape, np.conj(ghat).shape, grid.wg.shape)
         Ilm = np.einsum('ilm,ilp,i->lmp',fhat, np.conj(ghat), grid.wg)
         Ilm += np.einsum('ilm,ilp,i->lmp',fhat2, np.conj(ghat2), grid.wg)
 
@@ -438,14 +458,14 @@ def fast_rotational_correlation_vector(f, g, f2, g2, grid, fle):
 
     c = T.size*np.fft.ifftn(np.fft.ifftshift(T)).real
 
-    if np.amax(tmpcorr) >= np.amax(c):
-        c = np.zeros(T.shape)   # EV: actually doesn't need to be same dimension
-        c[0,0,0] = tmpcorr
-        R_idx = 0
-    
-    else:
-        R_idx = 1
+    # if np.amax(tmpcorr) >= np.amax(c):
+    #     c = np.zeros(T.shape)   # EV: actually doesn't need to be same dimension
+    #     c[0,0,0] = tmpcorr
+    #     R_idx = 0  
+    # else:
+    #     R_idx = 1
 
+    R_idx = 1
     return c, R_idx, f_t_norm, g_t_norm
 
 
