@@ -2,6 +2,8 @@ import time
 
 import numpy as np
 
+import finufft
+
 import torch
 import torch_harmonics as th
 
@@ -26,14 +28,14 @@ class Alignment:
 
     """f and g should are the normalized 3-D voxelized volumes"""
 
-    def __init__(self, f, g, grid, metric, use_correlation=False, store_alignment=True):
+    def __init__(self, f, g, grid, metric, use_correlation=False, apply_refinement=False, store_alignment=False):
 
-        c, d, R_idx = compute_rotational_distance(f, g, grid, metric)
+        c, d, R_idx, T = compute_rotational_distance(f, g, grid, metric)
         
         if use_correlation:
-            R = alignment_matrix_from_distances(c, R_idx, use_correlation=True)
+            R = alignment_matrix_from_distances(c, R_idx, T, apply_refinement=apply_refinement, use_correlation=use_correlation)
         else:
-            R = alignment_matrix_from_distances(d, R_idx, use_correlation=False)
+            R = alignment_matrix_from_distances(d, R_idx, T, apply_refinement=apply_refinement, use_correlation=use_correlation)
 
         o_est, b_est, a_est = Rotation.from_matrix(R.T).as_euler('zyz')
         
@@ -61,7 +63,7 @@ def compute_rotational_distance(f, g, grid, metric):
             max_l = M//2
             fle = fle_3d.FLEBasis3D(M, M, 1e-6, max_l=max_l, mode="complex", force_real="True")
 
-            c, R_idx, f_norm, g_norm = align_l2(np.flip(f, axis=2), np.flip(g, axis=2), grid, fle)
+            c, R_idx, f_norm, g_norm, T = align_l2(np.flip(f, axis=2), np.flip(g, axis=2), grid, fle)
             d = (f_norm + g_norm - 2*c)/np.sqrt(f_norm*g_norm)
 
         elif metric == 'SW':
@@ -69,7 +71,7 @@ def compute_rotational_distance(f, g, grid, metric):
             f_t = transforms.Transform(f, d, grid).inverse_cdf_transform()[0]
             g_t = transforms.Transform(g, d, grid).inverse_cdf_transform()[0]
             
-            c, R_idx, f_t_norm, g_t_norm = fast_rotational_correlation(f_t, g_t, grid, fle)
+            c, R_idx, f_t_norm, g_t_norm, T = fast_rotational_correlation(f_t, g_t, grid, fle)
   
             c = c/np.sqrt(f_t_norm*g_t_norm)
             d = (np.sqrt(f_t_norm/g_t_norm) + np.sqrt(g_t_norm/f_t_norm) - 2*c) / (4*np.pi)
@@ -82,7 +84,7 @@ def compute_rotational_distance(f, g, grid, metric):
             g_tp, g_tn = transforms.Transform(g, d, grid, apply_ramp=True).signed_inverse_cdf_transform()
             g_tp, g_tn = g_tp[0], g_tn[0]
             
-            cp, R_idx, f_t_norm, g_t_norm = fast_rotational_correlation_vector(f_tp, g_tp, f_tn, g_tn, grid, fle)
+            cp, R_idx, f_t_norm, g_t_norm, T = fast_rotational_correlation_vector(f_tp, g_tp, f_tn, g_tn, grid, fle)
   
             c = cp/np.sqrt(f_t_norm*g_t_norm)
 
@@ -91,10 +93,10 @@ def compute_rotational_distance(f, g, grid, metric):
         elif metric == 'SC':
             pass    
 
-        return c, d, R_idx        
+        return c, d, R_idx, T        
 
 
-def alignment_matrix_from_distances(c, R_idx, use_correlation):
+def alignment_matrix_from_distances(c, R_idx, T, use_correlation, maxitr_refine=10, eps_refine=1e-4, apply_refinement=True):
     
     if use_correlation:
         xiind,etaind,omegaind = np.unravel_index(np.argmax(c), c.shape)
@@ -122,10 +124,60 @@ def alignment_matrix_from_distances(c, R_idx, use_correlation):
         phi = -(xi + np.pi/2)
         theta = np.pi - eta
         psi = -(omega + np.pi/2)
+        # R_max = transforms2.rotation_matrix_from_zyz(phi,theta,psi)
 
+        if apply_refinement:
+            phi,theta,psi = refine(T, phi, theta, psi, c.shape, maxitr_refine, eps_refine) 
+            
         R_max = transforms.rotation_matrix_from_zyz(phi,theta,psi)
     
     return R_max 
+
+
+def refine(T, phi, theta, psi, s, maxitr_refine, eps_refine, eps=1e-8):
+
+    nufft_type = 2
+    plan = finufft.Plan(nufft_type, s, 1, eps,isign=1)
+    
+    for i in range(maxitr_refine):
+        w = np.array(s)**(i+1)/2
+    
+        xi = -(phi + np.pi/2)
+        eta = np.pi - theta
+        omega = -(psi + np.pi/2)
+    
+        #important to make the grid include the origin
+        #so the cost function is non-increasing.
+        x = np.concatenate(
+            (np.linspace(xi-2*np.pi/w[0], xi, s[0]//2+1,endpoint=False), np.linspace(xi, xi+2*np.pi/w[0], s[0]//2,endpoint=True)))
+        y = np.concatenate( 
+            (np.linspace(eta-np.pi/w[1], eta, s[1]//2+1,endpoint=False), np.linspace(eta, eta+np.pi/w[1], s[1]//2,endpoint=True)))
+        z = np.concatenate( 
+            (np.linspace(omega-2*np.pi/w[2], omega, s[2]//2+1,endpoint=False), np.linspace(omega, omega+2*np.pi/w[2], s[2]//2,endpoint=True)))
+    
+        X,Y,Z = np.meshgrid(x,y,z,indexing='ij')
+         
+        plan.setpts(X.flatten(), Y.flatten(), Z.flatten())
+    
+        c = plan.execute(T) #.reshape(len(x), len(y), len(z))
+    
+        xiind,etaind,omegaind = np.unravel_index(np.argmax(c), s)
+        xi = x[xiind]
+        eta = y[etaind]
+        omega = z[omegaind]
+    
+        phi2 = -(xi + np.pi/2)
+        theta2 = np.pi - eta
+        psi2 = -(omega + np.pi/2)
+    
+        val = np.sqrt((phi-phi2)**2 + (theta-theta2)**2 + (psi-psi2)**2)
+        phi = phi2
+        theta = theta2
+        psi = psi2
+        if val <= eps_refine:
+            break      
+
+    return phi, theta, psi
 
 
 def torch_reshape_order_t(b):
@@ -305,16 +357,17 @@ def fast_rotational_correlation(f, g, grid, fle):
     # print('checking tmpcorr', np.linalg.norm(tmpcorr-tmpcorr2), np.linalg.norm(tmpcorr))    
     ### need to multiply by T.size, because the ifft divides by this number
     c = T.size*np.fft.ifftn(np.fft.ifftshift(T)).real
+    R_idx = 1
 
-    if np.amax(tmpcorr) >= np.amax(c):
-        c = np.zeros(T.shape)   # EV: actually doesn't need to be same dimension
-        c[0,0,0] = tmpcorr
-        R_idx = 0
+    # if np.amax(tmpcorr) >= np.amax(c):
+    #     c = np.zeros(T.shape)   # EV: actually doesn't need to be same dimension
+    #     c[0,0,0] = tmpcorr
+    #     R_idx = 0
     
-    else:
-        R_idx = 1
+    # else:
+    #     R_idx = 1
 
-    return c, R_idx, f_t_norm, g_t_norm
+    return c, R_idx, f_t_norm, g_t_norm, T
 
 
 def fast_rotational_correlation_vector(f, g, f2, g2, grid, fle):
@@ -457,6 +510,7 @@ def fast_rotational_correlation_vector(f, g, f2, g2, grid, fle):
     #     tmpcorr += np.trace(Ilm[l,:,:]).real
 
     c = T.size*np.fft.ifftn(np.fft.ifftshift(T)).real
+    R_idx = 1
 
     # if np.amax(tmpcorr) >= np.amax(c):
     #     c = np.zeros(T.shape)   # EV: actually doesn't need to be same dimension
@@ -465,8 +519,7 @@ def fast_rotational_correlation_vector(f, g, f2, g2, grid, fle):
     # else:
     #     R_idx = 1
 
-    R_idx = 1
-    return c, R_idx, f_t_norm, g_t_norm
+    return c, R_idx, f_t_norm, g_t_norm, T
 
 
 def align_l2(f, g, grid, fle):
@@ -596,13 +649,14 @@ def align_l2(f, g, grid, fle):
 
     ### need to multiply by T.size, because the ifft divides by this number
     c = T.size*np.fft.ifftn(np.fft.ifftshift(T)).real
+    R_idx = 1
 
-    if np.amax(tmpcorr) >= np.amax(c):
-        c = np.zeros(T.shape)   # EV: actually doesn't need to be same dimension
-        c[0,0,0] = tmpcorr
-        R_idx = 0
+    # if np.amax(tmpcorr) >= np.amax(c):
+    #     c = np.zeros(T.shape)   # EV: actually doesn't need to be same dimension
+    #     c[0,0,0] = tmpcorr
+    #     R_idx = 0
     
-    else:
-        R_idx = 1
+    # else:
+    #     R_idx = 1
 
-    return c, R_idx, f_norm, g_norm
+    return c, R_idx, f_norm, g_norm, T
