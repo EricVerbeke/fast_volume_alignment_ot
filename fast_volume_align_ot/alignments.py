@@ -174,6 +174,7 @@ def refine(T, phi, theta, psi, s, maxitr_refine, eps_refine, eps=1e-8):
         phi = phi2
         theta = theta2
         psi = psi2
+        print("refinement iteration {}, eps = ".format(i), val)
         if val <= eps_refine:
             break      
 
