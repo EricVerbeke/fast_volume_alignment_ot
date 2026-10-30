@@ -28,8 +28,34 @@ class Alignment:
 
     """f and g should are the normalized 3-D voxelized volumes"""
 
-    def __init__(self, f, g, grid, metric, use_correlation=False, apply_refinement=False, store_alignment=False):
+    def __init__(self, 
+                 f, 
+                 g,
+                 metric,
+                 normalize=True,
+                 dx=False, # voxel spacing
+                 grid=False, 
+                 use_correlation=False, 
+                 apply_refinement=False, 
+                 store_alignment=False):
 
+        N = f.shape[0]
+
+        ### EV: adding this temporarily so that alignment only requires [f, g, metric] ###
+        if not dx:
+            dx = 1
+
+        if not grid:
+            if metric == 'L2':
+                grid = transforms.Grids(N=N, t_grid_type='uniform')
+            else:
+                grid = transforms.Grids(N=N)
+        
+        if normalize:
+            f = signals.Signal(f, dx=dx, d=3).preprocess_signals()[0]
+            g = signals.Signal(g, dx=dx, d=3).preprocess_signals()[0]
+        ################################################
+        
         c, d, R_idx, T = compute_rotational_distance(f, g, grid, metric)
         
         if use_correlation:
